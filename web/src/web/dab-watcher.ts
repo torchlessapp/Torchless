@@ -20,6 +20,9 @@ export class DabWatcher {
 
   prompt: DabPrompt | null = null;
   onPrompt: () => void = () => {};
+  /** Every dab the rig reports (20 s or more), jar or not, with the preset it ran on. Lifetime stats. */
+  onDab: (dab: JarDab, preset: number | undefined) => void = () => {};
+  private preset: number | undefined;
 
   private wasOn = false;
   private start: number | null = null;
@@ -55,12 +58,13 @@ export class DabWatcher {
     const now = this.now();
 
     if (on && !this.wasOn) {
-      this.start = now; this.goal = undefined; this.peak = 0; this.profile = undefined;
+      this.start = now; this.goal = undefined; this.peak = 0; this.profile = undefined; this.preset = undefined;
       this.waiting = null;   // a new dab before the last was rated: that one stays unrated (RATE IT in its history)
       this.cooling = null;
     }
     if (on) {
       if (s.preset >= 0 && s.preset <= 5) {
+        this.preset = s.preset;
         const ps = rig.presets[s.preset];
         const t = this.celsius ? ps.tempC : ps.tempF;
         if (t !== undefined) this.goal = t;
@@ -79,6 +83,7 @@ export class DabWatcher {
         if (this.peak > 0) dab.peak = this.peak;
         if (this.profile !== undefined) dab.profile = this.profile;
         if (this.goal !== undefined && !Dabs.isFlat(dab) && this.peak > 0 && Math.abs(this.peak - this.goal) >= 3) dab.goalTop = this.peak;
+        try { this.onDab({ ...dab }, this.preset); } catch { /* stats are best effort */ }
         let jarID: string | null = null;
         const c = this.store.currentID;
         if (c && this.store.addDab(dab, c)) jarID = c;

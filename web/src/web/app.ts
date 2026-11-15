@@ -21,16 +21,17 @@ import { mountTorch, TorchUI } from "./torch";
 import { playTransition } from "./transition";
 import { showTutorial, tutorialSeen } from "./tutorial";
 import { mountRig } from "./rig-ui";
+import { recordLife } from "./lifetime";
 import { Account, JarSync } from "./cloud";
 import { FACES, DEMO, DEMO_POINTS, TempTrace, makeFace, Face, Readout } from "./faces";
 import { HeatFX, heatSound, heatTrack, HEAT_SOUNDS, HEAT_TRACKS, validSound, validTrack } from "./heatfx";
-import { waypointsOf, drawCurve, CurveView, CURVE_W } from "./curve";
+import { waypointsOf, drawCurve, curveAt, CurveView, CURVE_W } from "./curve";
 
 // Puffco Peak support is only in the Peak test build (esbuild --define:__PEAK__=true, see package.json "peak").
 // The normal build leaves it out entirely, so the Switch app is unchanged until Manny says go live.
 declare const __PEAK__: boolean;
 const PEAK = typeof __PEAK__ !== "undefined" && __PEAK__;
-const BUILD = PEAK ? "app-5.7-peak.1" : "app-5.15";
+const BUILD = PEAK ? "app-5.7-peak.1" : "app-5.16";
 /** Set on the front page when this browser has no Web Bluetooth: what to do on this kind of device. */
 let noBtMessage = "";
 const clock = new RealClock();
@@ -94,6 +95,7 @@ function showTabSoon() {
   });
 }
 watcher.onPrompt = () => jarUI.renderPrompt();
+watcher.onDab = (d, preset) => recordLife(d, preset);
 const jarsLoaded = jars.load().then(() => watcher.appOpened());
 void jarsLoaded;
 // Domain move rescue (2026-11-13): torchlessapp.github.io/rescue/ reads the jars left under the old address and
@@ -381,6 +383,31 @@ let curveView: CurveView | null = null;
 const SLOT_COLORS = ["", "#A131E6", "#4E95FF", "#00E1ED", "#FF9D2E", "#FFFFFF"];
 function endsOnSlope(pts: { t: number; f: number }[]): boolean {
   return pts.length >= 2 && pts[pts.length - 1].f !== pts[pts.length - 2].f;
+}
+/** TARGET on a curve preset: null for a flat preset (the preset temp says it all). */
+function curveTarget(sel: number, celsius: boolean, heating: boolean): { text: string; now: number | null } | null {
+  if (sel < 1 || sel > 5) return null;
+  const pts = waypointsOf(rig.presets[sel]);
+  if (pts.length < 2) return null;
+  const vals = pts.map(p => (celsius ? p.c : p.f));
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  if (lo === hi) return null;
+  const s = rig.live;
+  if (!heating || !s) return { text: `${Math.round(vals[0])}–${Math.round(vals[vals.length - 1])}°`, now: null };
+  const total = pts[pts.length - 1].t + 10 * s.sessionExtend;
+  // The countdown only runs once the rig is at the start temp; before that the goal is the start.
+  const elapsed = s.sessionTimeRemaining < total ? total - s.sessionTimeRemaining : 0;
+  const v = curveAt(pts, celsius, elapsed, endsOnSlope(pts));
+  return v === null ? null : { text: `${Math.round(v)}°`, now: Math.round(v) };
+}
+/** Where +10 s would take a curve that ends on a slope (the rig keeps climbing or falling), else null. */
+function extendLandsAt(sel: number, celsius: boolean): number | null {
+  if (sel < 1 || sel > 5) return null;
+  const pts = waypointsOf(rig.presets[sel]);
+  if (!endsOnSlope(pts)) return null;
+  const n = (rig.live?.sessionExtend ?? 0) + 1;
+  const v = curveAt(pts, celsius, pts[pts.length - 1].t + 10 * n, true);
+  return v === null ? null : Math.round(v);
 }
 function renderCurve(sel: number, celsius: boolean, heating: boolean) {
   const p = sel >= 1 && sel <= 5 ? rig.presets[sel] : undefined;
@@ -769,6 +796,8 @@ const rigUI = mountRig(ble, rig, {
   onFindRig: () => { lookAround = false; schedule(); },
   lookLabel: () => `${faceID.toUpperCase()} · ${(prefs.get("look") ?? "dark").replace("light", "bright").toUpperCase()}`,
   buildLook: (page) => buildLookInto(page),
+  jars: () => jars.jars,
+  dabsLeft: () => dabsLeftText(),
 });
 // Look settings: on the Style tab (Look first, then Lights).
 function buildLookInto(page: HTMLElement) {
@@ -892,6 +921,11 @@ function render() {
   const heating = view.sessionOn;
   const fresh = view.linkFresh;
   const reconnecting = pk ? pk.link !== "ready" : ble.reconnecting;
+  if (!pk && wasLinked && !linked) {
+    // Manny's video 2026-11-15: the link dropped and came back during the rating pop-up. Nothing the pop-up does
+    // touches Bluetooth, so note what was going on next to the drop to find the cause from the next log.
+    ble.log(`APP: link dropped. Page ${document.visibilityState}, rating pop-up ${watcher.prompt ? "open" : "closed"}, heat ${rig.sessionOn ? "on" : "off"}, battery ${rig.live?.battery ?? "?"}%.`);
+  }
   if (heating !== wasHeating || linked !== wasLinked) { wasHeating = heating; wasLinked = linked; syncAwake(); }
   document.querySelectorAll<HTMLButtonElement>(".pvBtn").forEach(b => { if (b.disabled === rig.canPreview) b.disabled = !rig.canPreview; });
 
@@ -950,7 +984,7 @@ function render() {
   const lo = celsius ? 100 : 200, hi = celsius ? 350 : 700, room = celsius ? 21 : 70;
   const labels = celsius ? [100, 150, 200, 250, 300, 350] : [200, 300, 400, 500, 600, 700];
   labels.forEach((v, i) => setText(`gL${i}`, String(v)));
-  let frac = 0, targetFrac: number | null = null, targetText = "---", status = linked ? "WAITING ON THE RIG" : "NOT LINKED";
+  let frac = 0, targetFrac: number | null = null, targetNum: number | null = null, targetText = "---", status = linked ? "WAITING ON THE RIG" : "NOT LINKED";
   let profileText = "--";
   const presets = view.presets;
   if (s) {
@@ -959,6 +993,10 @@ function render() {
       const ps = presets[s.preset];
       const t = celsius ? ps.tempC : ps.tempF;
       if (t !== undefined) { targetText = `${t}°`; targetFrac = clamp01((t - lo) / (hi - lo)); }
+      // Manny's video 2026-11-15: on a 435-523 curve TARGET sat at 435. On a curve it follows the curve:
+      // the start temp while heating up, then the curve's temp at this second of the hold (and the range when idle).
+      const ct = pk ? null : curveTarget(s.preset, celsius, heating);
+      if (ct) { targetText = ct.text; targetNum = ct.now; targetFrac = ct.now !== null ? clamp01((ct.now - lo) / (hi - lo)) : targetFrac; }
       if (pk) profileText = pk.activeProfile !== null ? pk.profileName(pk.activeProfile) : "--";
       else if (ps.profile !== undefined) profileText = HeatProfile.name(ps.profile);
     }
@@ -989,7 +1027,7 @@ function render() {
     let fill = 0, presetLine = "";
     if (s && s.preset >= 0 && s.preset <= 5) {
       const ps = presets[s.preset];
-      const t = celsius ? ps.tempC : ps.tempF;
+      const t = targetNum ?? (celsius ? ps.tempC : ps.tempF);
       if (t !== undefined && t > room) fill = clamp01((s.tempRaw - room) / (t - room));
       presetLine = pk ? `PROFILE ${s.preset} · ${profileText.toUpperCase()}`
         : `PRESET ${s.preset} · ${ps.profile !== undefined ? HeatProfile.name(ps.profile).toUpperCase() : "—"}`;
@@ -1047,6 +1085,13 @@ function render() {
   }
   enable("heat", pk ? pk.canHeat : rig.canHeat);
   enable("extend", pk ? pk.canBoost : rig.canExtend);
+  // Manny's video 2026-11-15: +10 s on a climbing curve took the rig to 549 on a 523 plan. Say where it lands.
+  if (!pk) {
+    const t = $("extend").querySelector(".tag");
+    const lands = s && heating ? extendLandsAt(s.preset, celsius) : null;
+    if (t) setTextEl(t, lands !== null ? `TO ~${lands}°` : "MORE TIME");
+    $("extend").classList.toggle("ramps", lands !== null);
+  }
   if (PEAK) {
     const b = $("extend").querySelector("b"), t = $("extend").querySelector(".tag");
     if (b) setTextEl(b, pk ? "BOOST" : "+10s");

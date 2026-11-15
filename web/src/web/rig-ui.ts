@@ -8,6 +8,8 @@ import type { PeakController } from "../rig/puffco/peak-controller";
 import { chargingOf, unitText, sessionOnOf, hapticsOf } from "../rig/frames";
 import { h, openSheet, topBar, textBtn, tag, icon } from "./jar-ui";
 import { CLEAN_CHOICES } from "./extras";
+import type { Jar } from "./jars";
+import { loadLife, summarize, rigRows, durText } from "./lifetime";
 
 export interface RigUIHooks {
   build: string;
@@ -22,6 +24,10 @@ export interface RigUIHooks {
   setClean(on: boolean, every: number): void;
   /** Peak test build only: the Peak controller when a Peak is the linked rig, else null. */
   peak?: () => PeakController | null;
+  /** Jars, for lifetime stats per jar. */
+  jars(): Jar[];
+  /** "About N dabs left" or null. */
+  dabsLeft(): string | null;
   /** Peak test build only: the "compatible with" line. */
   compatLine?: string;
 }
@@ -56,13 +62,15 @@ export function mountRig(ble: BLEManager, rig: RigController, hooks: RigUIHooks)
   const log = row("Log", "list", () => "SHARE IT", "var(--dim)", openLog);
   const dial = row("Ride the dial", "dial", () => "TEST", "var(--gold)", openDial);
   const raw = row("Raw status", "pulse", () => "", "var(--dim)", openRaw);
+  const settings = row("Rig settings", "rig", () => { const s = rig.live; return s ? `${s.brightness === 0 ? "STEALTH" : s.brightness + "%"} · °${unitText(s)}` : ""; }, "var(--dim)", openSettings);
+  const stats = row("Lifetime stats", "list", () => rig.rigStats.heatCycles !== undefined ? `${rig.rigStats.heatCycles} CYCLES` : "", "var(--gold)", openStats);
 
   panel.replaceChildren(
     h("h2", {}, "RIG"),
     linkCard,
     h("div", { class: "tiles" }, tBat.el, tPow.el, tUnit.el),
     h("div", { class: "stackS" }, unlink, unlinkNote, findRig),
-    h("div", { class: "panel toolList" }, clean.b, h("hr"), howTo.b),
+    h("div", { class: "panel toolList" }, settings.b, h("hr"), stats.b, h("hr"), clean.b, h("hr"), howTo.b),
     h("div", {}, tag("SHOP TOOLS", "font-size:9.5px"), h("div", { class: "panel toolList", style: "margin-top:8px" }, log.b, h("hr"), raw.b)),
     h("p", { class: "mono dim center", style: "font-size:9.5px;margin-top:6px" }, `${hooks.compatLine ?? "Compatible with Dr. Dabber Switch 2. Not an official Dr. Dabber app."} Build ${hooks.build}.`),
   );
@@ -84,7 +92,8 @@ export function mountRig(ble: BLEManager, rig: RigController, hooks: RigUIHooks)
     set(unlink, !pk && rig.disconnectWaiting ? "UNLINK NOW" : "UNLINK");
     unlinkNote.hidden = !(l && !pk && rig.disconnectWaiting);
     findRig.hidden = l;
-    look.upd(); clean.upd(); howTo.upd(); log.upd(); dial.upd(); raw.upd();
+    settings.b.hidden = !!pk; settings.b.nextElementSibling?.toggleAttribute("hidden", !!pk);
+    look.upd(); clean.upd(); settings.upd(); stats.upd(); howTo.upd(); log.upd(); dial.upd(); raw.upd();
     pageUpd?.();
   }
 
@@ -113,6 +122,152 @@ export function mountRig(ble: BLEManager, rig: RigController, hooks: RigUIHooks)
         h("p", { class: "sub cond", style: "font-size:19px;margin:0" }, "A reminder on Home when it's time to deep clean."),
         h("label", { class: "toolRow", style: "cursor:pointer" }, h("span", { class: "cond", style: "font-size:20px" }, "Remind me"), h("span", { style: "flex:1" }), sw),
         pick);
+    });
+  }
+
+  // MARK: Rig settings (app-5.16): what the Switch 2 protocol lets an app change, like the Dr. Dabber Device page.
+
+  function openSettings() {
+    page("RIG SETTINGS", body => {
+      const kv = (k: string, v: HTMLElement | string) => h("div", { class: "kv" }, h("span", {}, k), typeof v === "string" ? h("b", {}, v) : v);
+      const sw = () => h("input", { type: "checkbox", style: "width:28px;height:28px;accent-color:var(--gold)" }) as HTMLInputElement;
+      const label = (t: string, sub: string | null, ctl: HTMLElement) => h("label", { class: "toolRow", style: "cursor:pointer;min-height:60px" },
+        h("div", { style: "flex:1;min-width:0" }, h("b", { class: "cond", style: "font-size:20px;font-weight:500;display:block" }, t), sub ? h("small", { class: "mono dim", style: "font-size:10px" }, sub) : ""), ctl);
+
+      // Lights: stealth is brightness 0 (same as the official app); turning it off goes back to the last level.
+      const stealth = sw();
+      let lastBright = 50;
+      stealth.onchange = () => rig.setBrightness(stealth.checked ? 0 : lastBright || 50);
+      const bright = h("input", { type: "range", min: "0", max: "100", step: "1", style: "flex:1;accent-color:var(--live)" }) as HTMLInputElement;
+      const brightV = h("b", { class: "cond", style: "width:48px;text-align:right;font-size:20px" });
+      let brightAt = 0;
+      bright.oninput = () => { brightAt = Date.now(); set(brightV, bright.value + "%"); rig.setBrightness(Number(bright.value)); };
+      const haptics = sw();
+      haptics.onchange = () => rig.setHaptics(haptics.checked);
+
+      // Auto shut-off: 0 = never, 1-60 min on the Switch 2.
+      const offPick = h("select", { class: "textLine", style: "margin:0;width:auto;font-size:17px" }) as HTMLSelectElement;
+      const offChoices = [0, 1, 2, 3, 5, 10, 15, 20, 30, 45, 60];
+      const fillOff = (cur: number) => {
+        const list = offChoices.includes(cur) ? offChoices : [...offChoices, cur].sort((a, b) => a - b);
+        if (offPick.options.length !== list.length) offPick.replaceChildren(...list.map(n => h("option", { value: String(n) }, n ? `${n} min` : "Never")));
+      };
+      offPick.onchange = () => rig.setAutoShutOff(Number(offPick.value));
+      const offLeft = h("small", { class: "mono dim", style: "font-size:10px" });
+
+      const segF = h("button", { onclick: () => rig.setCelsius(false) }, "°F");
+      const segC = h("button", { onclick: () => rig.setCelsius(true) }, "°C");
+      const unitNote = h("small", { class: "mono dim", style: "font-size:10px" });
+
+      // Cleaning assist (0xC6): the rig's own short warm-up for cleaning.
+      const cleanBtn = h("button", { class: "btn2 wide" }) as HTMLButtonElement;
+      const cleanLine = h("p", { class: "mono sub", style: "font-size:10.5px;margin:0" });
+
+      const health = h("div", { class: "panel pad" });
+
+      body.append(
+        h("p", { class: "sub cond", style: "font-size:19px;margin:0" }, "Saved on the rig itself."),
+        tag("LIGHTS", "font-size:9.5px"),
+        h("div", { class: "panel toolList" },
+          label("Stealth", "Lights off. Turn it off to go back to your level.", stealth), h("hr"),
+          h("div", { class: "toolRow", style: "gap:12px" }, h("span", { class: "cond", style: "font-size:20px" }, "Brightness"), bright, brightV)),
+        tag("FEEL AND POWER", "font-size:9.5px"),
+        h("div", { class: "panel toolList" },
+          label("Haptics", "The rig buzzes when it's ready.", haptics), h("hr"),
+          h("div", { class: "toolRow" }, h("div", { style: "flex:1;min-width:0" }, h("b", { class: "cond", style: "font-size:20px;font-weight:500;display:block" }, "Auto shut-off"), offLeft), offPick)),
+        tag("UNITS", "font-size:9.5px"),
+        h("div", { class: "seg", style: "grid-template-columns:1fr 1fr;margin-top:0" }, segF, segC), unitNote,
+        tag("CLEANING ASSIST", "font-size:9.5px"),
+        h("div", { class: "panel pad stackS" },
+          h("p", { class: "cond", style: "font-size:18px;margin:0" }, "The rig warms the chamber for about 30 seconds so residue wipes out easier. Swab it while it's warm."),
+          cleanBtn, cleanLine),
+        tag("BATTERY AND HEALTH", "font-size:9.5px"), health);
+
+      return () => {
+        const s = rig.live, ok = rig.canControl, heating = rig.sessionOn;
+        if (s) {
+          if (s.brightness > 0) lastBright = s.brightness;
+          stealth.checked = s.brightness === 0;
+          if (Date.now() - brightAt > 1500 && document.activeElement !== bright) { bright.value = String(s.brightness); set(brightV, s.brightness + "%"); }
+          haptics.checked = hapticsOf(s);
+          fillOff(s.autoShutOff);
+          if (document.activeElement !== offPick) offPick.value = String(s.autoShutOff);
+          set(offLeft, s.autoShutOff ? `Turns off after ${s.autoShutOff} min idle` + (s.autoShutOffRemaining ? ` · ${s.autoShutOffRemaining} min left` : "") : "Stays on until you turn it off");
+          segF.classList.toggle("on", s.unitByte === 15); segC.classList.toggle("on", s.unitByte === 12);
+        }
+        for (const c of [stealth, bright, haptics]) c.disabled = !ok;
+        offPick.disabled = !ok || heating;
+        (segF as HTMLButtonElement).disabled = (segC as HTMLButtonElement).disabled = !ok || heating;
+        set(unitNote, heating ? "Change units after the dab." : "Changes the rig's screen and the whole app.");
+        const ca = rig.cleanAssist;
+        const running = !!ca && ca.secondsLeft > 0 && Date.now() - ca.at < 5000;
+        set(cleanBtn, running ? "CANCEL" : "START CLEANING ASSIST");
+        cleanBtn.onclick = () => rig.cleaningAssist(!running);
+        cleanBtn.disabled = !ok || (!running && heating);
+        set(cleanLine, running ? `Warming · ${ca!.secondsLeft}s left` : heating ? "Not while a dab is heating." : "First time on your rig: stay with it.");
+        const di = ble.deviceInfo, fw = ble.extra["Firmware (0xC3)"] ?? Object.entries(di).find(([k]) => /firmware|software/i.test(k))?.[1];
+        const left = hooks.dabsLeft();
+        health.replaceChildren(
+          kv("Battery", s ? `${s.battery}%${chargingOf(s) ? " · charging" : ""}` : "--"),
+          left ? kv("Dabs left", left) : "",
+          kv("Rig", ble.peripheralName || "--"),
+          fw ? kv("Firmware", fw) : "",
+          ...Object.entries(di).filter(([k]) => /model|serial|hardware/i.test(k)).map(([k, v]) => kv(k, v)),
+          rig.healthFlags ? kv("Status codes", rig.healthFlags.join(" · ")) : "",
+          rig.healthFlags ? h("p", { class: "mono dim", style: "font-size:10px;margin:6px 0 0" }, "The rig's own codes (device, battery, board, chamber). We don't know what each number means yet.") : "");
+      };
+    });
+  }
+
+  // MARK: Lifetime stats (app-5.16)
+
+  function openStats() {
+    rig.requestStats();
+    page("LIFETIME", body => {
+      const rigBox = h("div", { class: "panel pad" });
+      const mine = h("div", { class: "panel pad" });
+      const jarBox = h("div", { class: "stackS" });
+      body.append(
+        tag("YOUR RIG, ALL TIME", "font-size:9.5px"), rigBox,
+        tag("WITH TORCHLESS", "font-size:9.5px"), mine,
+        tag("BY JAR", "font-size:9.5px"), jarBox);
+      const kv = (k: string, v: string) => h("div", { class: "kv" }, h("span", {}, k), h("b", {}, v));
+      let shownAt: number | undefined = -1;
+      const life = loadLife();
+      return () => {
+        const celsius = rig.live?.unitByte === 12;
+        if (rig.rigStats.at !== shownAt) {
+          shownAt = rig.rigStats.at;
+          const rows = rigRows(rig.rigStats, celsius);
+          rigBox.replaceChildren(...(rows.length ? rows.map(([k, v]) => kv(k, v))
+            : [h("p", { class: "mono dim", style: "margin:0;font-size:11px" }, rig.canControl ? "Asking the rig…" : "Link the rig to read its counters.")]));
+          const sm = summarize(life, hooks.jars(), celsius);
+          const since = sm.since ? new Date(sm.since).toLocaleDateString() : null;
+          mine.replaceChildren(...(sm.dabs ? [
+            kv("Dabs", String(sm.dabs)),
+            kv("Heat time", durText(sm.seconds)),
+            kv("Average dab", durText(sm.avgSeconds)),
+            sm.favTemp !== undefined ? kv("Favorite temp", `${sm.favTemp}°`) : "",
+            sm.favPreset !== undefined ? kv("Favorite preset", `P${sm.favPreset}`) : "",
+            sm.favProfile ? kv("Favorite profile", sm.favProfile) : "",
+            sm.hottest !== undefined ? kv("Hottest peak", `${sm.hottest}°`) : "",
+            kv("Last 7 days", String(sm.last7)),
+            sm.busiestDay ? kv("Busiest day", `${sm.busiestDay.n} on ${new Date(sm.busiestDay.day).toLocaleDateString()}`) : "",
+            sm.avgRating !== undefined ? kv("Average rating", `${sm.avgRating} (${sm.rated} rated)`) : "",
+            sm.grams ? kv("Logged", `${sm.grams} g`) : "",
+            since ? h("p", { class: "mono dim", style: "font-size:10px;margin:6px 0 0" }, `Since ${since}. Counts dabs this phone saw.`) : "",
+          ] : [h("p", { class: "mono dim", style: "margin:0;font-size:11px" }, "No dabs yet. They show up here after your first one.")]));
+          jarBox.replaceChildren(...(sm.jars.length ? sm.jars.slice(0, 12).map(j => h("div", { class: "panel pad" },
+            h("div", { class: "row" }, h("b", { class: "cond", style: "font-size:20px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" }, j.name),
+              j.avg !== undefined ? h("b", { class: "cond gold", style: "font-size:22px" }, j.avg.toFixed(1)) : ""),
+            h("small", { class: "mono dim", style: "font-size:10.5px" }, [
+              `${j.dabs} dab${j.dabs === 1 ? "" : "s"}`,
+              j.best !== undefined ? `best at ${j.best}°` : j.temp !== undefined ? `usually ${j.temp}°` : "",
+              j.grams ? `${j.grams} g` : "",
+            ].filter(Boolean).join(" · "))))
+            : [h("p", { class: "mono dim", style: "margin:0;font-size:11px" }, "Pick a jar on Home and your dabs land on it.")]));
+        }
+      };
     });
   }
 

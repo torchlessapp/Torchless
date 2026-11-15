@@ -21,6 +21,26 @@ export function waypointsOf(p: PresetInfo): Waypoint[] {
   return out.length && out[0].t === 0 ? out : [];
 }
 
+/** The curve's temp at t seconds into the hold (the rig's countdown time), in the units shown. Past the last
+ *  point the temp stays flat, or keeps the last slope when keepsRamp (what the rig does with +10 s). */
+export function curveAt(pts: Waypoint[], celsius: boolean, t: number, keepsRamp: boolean): number | null {
+  if (!pts.length) return null;
+  const v = (p: Waypoint) => (celsius ? p.c : p.f);
+  const last = pts[pts.length - 1], prev = pts.length > 1 ? pts[pts.length - 2] : last;
+  if (t <= 0) return v(pts[0]);
+  if (t >= last.t) {
+    const slope = keepsRamp && last.t > prev.t ? (v(last) - v(prev)) / (last.t - prev.t) : 0;
+    return v(last) + slope * (t - last.t);
+  }
+  for (let i = 1; i < pts.length; i++) {
+    if (t <= pts[i].t) {
+      const a = pts[i - 1], b = pts[i];
+      return b.t === a.t ? v(b) : v(a) + (v(b) - v(a)) * (t - a.t) / (b.t - a.t);
+    }
+  }
+  return v(last);
+}
+
 export interface CurveView {
   /** SVG markup for the chart body (viewBox 0 0 W H). */
   svg: string;

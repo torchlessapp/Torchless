@@ -269,6 +269,12 @@
   .switchRate { font: 700 24px var(--cond); color: var(--gold); }
   .switchRate.none { color: var(--dim); }
   .heatBlock { position: sticky; bottom: calc(70px + env(safe-area-inset-bottom)); z-index: 4; }
+  /* app-5.16 (Manny's video 2026-11-15): the dock sat on top of the preset card with the card showing through.
+     A solid backdrop behind the dock, and while heating the locked preset keys and plan row fold away so the
+     curve card moves up clear of it. */
+  .heatBlock::before { content: ""; position: absolute; left: -16px; right: -16px; top: -14px; bottom: -8px; z-index: -1; background: linear-gradient(to bottom, transparent, var(--bg) 14px); pointer-events: none; }
+  body.heating .presetHead, body.heating .presets, body.heating .planRow { display: none; }
+  #extend.ramps .tag { color: var(--warn); }
   .heatBlock .bigBtn { min-height: 64px; font-size: 32px; box-shadow: 0 8px 22px rgba(0,0,0,.45); }
   .planPill { margin-left: auto; margin-right: 8px; min-height: 34px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; background: var(--live); color: var(--bg, #06090c); font: 700 11px var(--mono); letter-spacing: 1.2px; box-shadow: 0 0 14px color-mix(in srgb, var(--live) 45%, transparent); }
   .planPill .ico { font-size: 15px; }

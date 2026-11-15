@@ -90,7 +90,20 @@ export const RigFrames = {
   },
 };
 
-export interface B9Change { preset?: number; lightMode?: number; brightness?: number; haptics?: boolean; extendPlusOne?: boolean }
+export interface B9Change { preset?: number; lightMode?: number; brightness?: number; haptics?: boolean; extendPlusOne?: boolean; autoShutOff?: number; unitByte?: number }
+
+/** The rig's own counters (0xA2). It sends three of these on connect, and again after Request stats.
+ *  Heat cycles and the per-profile counts are confirmed on Manny's rig; the rest are the official app's labels. */
+export interface RigStats {
+  favTempF?: number; favTempC?: number; heatCycles?: number; mostInADay?: number; chargeCycles?: number;
+  favProfile?: number; favLight?: number; totalTime?: number; resets?: number;
+  totalTimeLong?: number; operationTime?: number; profileCycles?: number[];
+  /** ms since 1970 of the last 0xA2. */
+  at?: number;
+}
+
+/** Cleaning assist (0xF1): state byte and seconds left, as the rig reports them. */
+export interface CleanAssist { state: number; secondsLeft: number; at: number }
 
 // MARK: Presets and light show models
 
@@ -463,11 +476,71 @@ export class RigController {
       case 170:
         if (b.length >= 3 && b[2] <= 5) this.presets[b[2]].custom170 = b;
         break;
+      case 162: this.readStats(b); break;
+      case 241:
+        if (b.length >= 4) this.cleanAssist = { state: b[2], secondsLeft: b[3], at: Date.now() };
+        break;
+      case 225:
+        if (b.length >= 6) this.healthFlags = [b[2], b[3], b[4], b[5]];
+        break;
       case 171:
         if (b.length >= 3 && b[2] <= 5) this.presets[b[2]].custom171 = b;
         break;
     }
     this.changed();
+  }
+
+  // MARK: Rig settings page (app-5.16): stats, cleaning assist, health flags, auto shut-off, units
+
+  rigStats: RigStats = {};
+  cleanAssist: CleanAssist | null = null;
+  /** 0xE1 device, battery, board, chamber bytes. Meaning not known: shown raw. */
+  healthFlags: number[] | null = null;
+
+  private readStats(b: number[]) {
+    const v = (i: number) => this.u16(b, i) ?? undefined;
+    const u32 = (i: number) => i + 3 < b.length ? ((b[i] << 24) >>> 0) + (b[i + 1] << 16) + (b[i + 2] << 8) + b[i + 3] : undefined;
+    const st = this.rigStats;
+    switch (b[1]) {
+      case 20:
+        if (b.length < 18) return;
+        Object.assign(st, { favTempF: v(2), favTempC: v(4), heatCycles: v(6), mostInADay: v(8), chargeCycles: v(10),
+          favProfile: b[12], favLight: b[13], totalTime: v(14), resets: v(16) });
+        break;
+      case 7: st.totalTimeLong = u32(2); break;
+      case 11: st.totalTimeLong = u32(2); st.operationTime = u32(6); break;
+      case 13: {
+        const c: number[] = [];
+        for (let k = 0; k < 5; k++) { const x = v(2 + k * 2); if (x !== undefined) c.push(x); }
+        st.profileCycles = c;
+        break;
+      }
+      default: return;
+    }
+    st.at = Date.now();
+  }
+
+  /** Asks the rig for its counters (0xB2). Seen answered at once on Manny's rig (three 0xA2 frames). */
+  requestStats() {
+    if (!this.canControl) return;
+    this.enqueue(this.item({ label: "Request stats", kind: { t: "raw", bytes: [178, 4, 255, 178] }, auto: true }));
+  }
+
+  /** Auto shut-off in minutes, 0 = never. Switch 2 takes 1-60. */
+  setAutoShutOff(min: number) {
+    const m = clamp(Math.round(min), 0, 60);
+    this.enqueue(this.item({ label: `Auto shut-off ${m ? m + " min" : "off"}`, kind: { t: "b9", change: { autoShutOff: m }, intent: "echo" }, requireSessionOff: true }));
+  }
+
+  /** Display units on the rig and in the app. Not while heating. */
+  setCelsius(on: boolean) {
+    this.enqueue(this.item({ label: `Units ${on ? "C" : "F"}`, kind: { t: "b9", change: { unitByte: on ? 12 : 15 }, intent: "echo" }, requireSessionOff: true }));
+  }
+
+  /** Cleaning assist (0xC6): the rig runs its own short clean heat. Start only when not heating; cancel any time. */
+  cleaningAssist(start: boolean) {
+    if (start && this.sessionOn) { this.say("Cleaning assist only starts when the rig is not heating."); return; }
+    this.enqueue(this.item({ label: `Cleaning assist ${start ? "start" : "cancel"}`, kind: { t: "raw", bytes: [198, 4, start ? 170 : 0, 198] }, requireSessionOff: start }));
   }
 
   connectionChanged(isUp: boolean) {
@@ -742,6 +815,8 @@ export class RigController {
     if (change.lightMode !== undefined) f.lightMode = change.lightMode;
     if (change.brightness !== undefined) f.brightness = change.brightness;
     if (change.haptics !== undefined) f.haptics = change.haptics;
+    if (change.autoShutOff !== undefined) f.autoShutOff = change.autoShutOff;
+    if (change.unitByte !== undefined) f.unitByte = change.unitByte;
     if (change.extendPlusOne) {
       const n = f.extend + 1;
       const hold = this.presets[clamp(f.preset, 0, 5)].hold;
