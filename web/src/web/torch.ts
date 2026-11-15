@@ -8,7 +8,7 @@
 
 import { JarStore, JarDab, uid, photoURLs } from "./jars";
 import { DabWatcher } from "./dab-watcher";
-import { heatSound } from "./heatfx";
+import { heatSound, validSound } from "./heatfx";
 import { h, tag, icon } from "./jar-ui";
 
 export interface TorchDeps {
@@ -252,7 +252,7 @@ export function mountTorch(root: HTMLElement, deps: TorchDeps): TorchUI {
   let shown = true;
   let timer = 0;
   let note: { tag: string; text: string } | null = null;
-  const theme = () => deps.prefs.get("heatSound") ?? "chimes";
+  const theme = () => validSound(deps.prefs.get("heatSound"));
   const reduce = matchMedia("(prefers-reduced-motion: reduce)");
   /** A moment that passed more than this long ago (the page was away) gets no sound. */
   const FRESH = 1500;

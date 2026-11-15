@@ -30,7 +30,7 @@ import { waypointsOf, drawCurve, CurveView, CURVE_W } from "./curve";
 // The normal build leaves it out entirely, so the Switch app is unchanged until Manny says go live.
 declare const __PEAK__: boolean;
 const PEAK = typeof __PEAK__ !== "undefined" && __PEAK__;
-const BUILD = PEAK ? "app-5.7-peak.1" : "app-5.14";
+const BUILD = PEAK ? "app-5.7-peak.1" : "app-5.15";
 /** Set on the front page when this browser has no Web Bluetooth: what to do on this kind of device. */
 let noBtMessage = "";
 const clock = new RealClock();
@@ -1160,7 +1160,7 @@ $("dialDown").onclick = () => rig.dialNudge(-RigController.dialStep);
 $("dialUp").onclick = () => rig.dialNudge(RigController.dialStep);
 $("dialA").onclick = () => { if (rig.dialCurrent === rig.dialStart) { rig.dialMode = "live"; schedule(); } };
 $("dialB").onclick = () => { if (rig.dialCurrent === rig.dialStart) { rig.dialMode = "active"; schedule(); } };
-const heatFX = new HeatFX($("faceCard"), () => prefs.get("heatSound") ?? "chimes", () => prefs.get("heatTrack") ?? "look", () => faceID);
+const heatFX = new HeatFX($("faceCard"), () => validSound(prefs.get("heatSound")), () => prefs.get("heatTrack") ?? "look", () => faceID);
 rig.onChange = () => { watcher.update(rig); heatFX.update(rig); extras.update(rig); plannerRefresh?.(); schedule(); };
 // The Peak feeds the same jar dab log and heat-up look through the shared read-only shape. Not extras: its battery
 // maths and clean counts are tuned to the Switch.

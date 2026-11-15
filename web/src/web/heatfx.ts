@@ -36,7 +36,7 @@ export const HEAT_TRACKS = [
 ] as const;
 
 /** Lo-Fi and Zen are shelved (Manny, 2026-11-12). Their synth code stays, but a saved pick of either plays as Clean. */
-export const validSound = (id: string | null): string => HEAT_SOUNDS.some(c => c.id === id) ? id! : "chimes";
+export const validSound = (id: string | null): string => HEAT_SOUNDS.some(c => c.id === id) ? id! : "torch";   // app-5.15: Torch is the default look (Manny)
 export const validTrack = (id: string | null): string => HEAT_TRACKS.some(c => c.id === id) ? id! : "look";
 
 export type HeatEvent = "start" | "ready" | "tick" | "done" | "cut" | "sweep" | "cooled";
