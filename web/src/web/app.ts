@@ -495,7 +495,7 @@ $("pCustom").onclick = () => {
     p >= 1 && p <= 5 ? h("button", { class: "goldBtn", disabled: !rig.canControl || rig.sessionOn, onclick: () => {
       close();
       mineState = "sending"; schedule();
-      const went = rig.saveCurveOnce(p, mine.map(x => ({ ...x })), r => { mineState = r === "ok" ? "ready" : r === "no report" ? "sent" : "failed"; schedule(); });
+      const went = rig.saveCurveOnce(p, RigController.withFlatEnd(mine.map(x => ({ ...x }))), r => { mineState = r === "ok" ? "ready" : r === "no report" ? "sent" : "failed"; schedule(); });
       if (!went) { mineState = ""; schedule(); }
     } }, `USE ON P${p} FOR ONE DAB`) : h("p", { class: "mono dim" }, "Pick a preset first. My Curve borrows it for one dab."),
     h("small", { class: "mono dim", style: "display:block;margin:6px 0 10px" }, "That preset goes back after the dab."),

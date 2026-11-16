@@ -1133,6 +1133,20 @@ export class RigController {
 
   /** Plain-words reason a curve can't be saved, or null when it is fine. 2 to 5 points, first at 0 s, times
    *  rising, last at 10 to 90 s, 250 to 650 F, and no ramp steeper than the official editor allows. */
+  /** app-5.17 (Manny 2026-11-16): every curve sent to the rig ends with a flat last second, so +10 s and HOLD
+   *  stay at the end temp instead of carrying the last climb on (the rig extends the last slope). The last point
+   *  moves 1 s earlier and a flat point takes its place; if that breaks a rule, a flat point 1 s later is added.
+   *  A curve already flat at the end, or with 5 points, goes as it is. */
+  static withFlatEnd(steps: CurveStep[]): CurveStep[] {
+    const n = steps.length;
+    if (n < 2 || n >= 5 || steps[n - 1].f === steps[n - 2].f) return steps;
+    const last = steps[n - 1];
+    const early = [...steps.slice(0, -1), { t: last.t - 1, f: last.f }, { t: last.t, f: last.f }];
+    if (RigController.curveProblem(early) === null) return early;
+    const late = [...steps, { t: last.t + 1, f: last.f }];
+    return RigController.curveProblem(late) === null ? late : steps;
+  }
+
   static curveProblem(steps: CurveStep[]): string | null {
     if (steps.length < 2 || steps.length > 5) return "A curve needs 2 to 5 points.";
     // Swift takes whole numbers only by type; here anything else is refused before the rules run.
