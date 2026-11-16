@@ -30,7 +30,9 @@ const check = (name, ok, detail = '') => { if (!ok) bad++; console.log(`CHECK ${
   await p.screenshot({ path: `${out}/a-heating-curve.png` });
   await p.click('#extend'); await p.waitForTimeout(1500);
   check('+10s tag moves on after a tap', /^TO ~5\d\d°$/.test(await text('#extend .tag')), await text('#extend .tag'));
-  await p.waitForTimeout(8000); await p.click('#cut'); await p.waitForTimeout(1500);
+  for (let i = 0; i < 4; i++) { await p.click('#extend'); await p.waitForTimeout(1300); }
+  check('+10s never shows past the rig top', /^TO (~[56]\d\d°|650° MAX)$/.test(await text('#extend .tag')) && !/6[5-9]\d|7\d\d/.test((await text('#extend .tag')).replace('650° MAX', '')), await text('#extend .tag'));
+  await p.waitForTimeout(3000); await p.click('#cut'); await p.waitForTimeout(1500);
   check('after CUT: presets back', await vis('#p1'));
   await p.click('nav [data-tab=rig]'); await p.waitForTimeout(500);
   await p.screenshot({ path: `${out}/b-rig.png`, fullPage: true });

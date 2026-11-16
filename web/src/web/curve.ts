@@ -30,7 +30,9 @@ export function curveAt(pts: Waypoint[], celsius: boolean, t: number, keepsRamp:
   if (t <= 0) return v(pts[0]);
   if (t >= last.t) {
     const slope = keepsRamp && last.t > prev.t ? (v(last) - v(prev)) / (last.t - prev.t) : 0;
-    return v(last) + slope * (t - last.t);
+    // The rig's top is 650 F / 343 C (Switch 2 limits). A long climb is never shown past it.
+    const top = celsius ? 343 : 650, bottom = celsius ? 121 : 250;
+    return Math.min(top, Math.max(bottom, v(last) + slope * (t - last.t)));
   }
   for (let i = 1; i < pts.length; i++) {
     if (t <= pts[i].t) {

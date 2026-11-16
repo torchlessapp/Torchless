@@ -31,7 +31,7 @@ import { waypointsOf, drawCurve, curveAt, CurveView, CURVE_W } from "./curve";
 // The normal build leaves it out entirely, so the Switch app is unchanged until Manny says go live.
 declare const __PEAK__: boolean;
 const PEAK = typeof __PEAK__ !== "undefined" && __PEAK__;
-const BUILD = PEAK ? "app-5.7-peak.1" : "app-5.16";
+const BUILD = PEAK ? "app-5.7-peak.1" : "app-5.17";
 /** Set on the front page when this browser has no Web Bluetooth: what to do on this kind of device. */
 let noBtMessage = "";
 const clock = new RealClock();
@@ -1089,7 +1089,9 @@ function render() {
   if (!pk) {
     const t = $("extend").querySelector(".tag");
     const lands = s && heating ? extendLandsAt(s.preset, celsius) : null;
-    if (t) setTextEl(t, lands !== null ? `TO ~${lands}°` : "MORE TIME");
+    // app-5.17: after several taps the climb ran past the rig's top (Manny saw "TO ~670°"). Capped, and said so.
+    const top = celsius ? 343 : 650;
+    if (t) setTextEl(t, lands === null ? "MORE TIME" : lands >= top ? `TO ${top}° MAX` : `TO ~${lands}°`);
     $("extend").classList.toggle("ramps", lands !== null);
   }
   if (PEAK) {
